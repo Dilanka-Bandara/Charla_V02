@@ -1,46 +1,61 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
+from jose import jwt, JWTError # <--- NEW IMPORT
+from app.core.config import settings # <--- NEW IMPORT
 from app.db.session import engine, Base
 from app.websockets.manager import manager
-from app.api import auth  # Import the auth routes we made
+from app.api import auth 
 
-# 1. Create Database Tables automatically on startup
 Base.metadata.create_all(bind=engine)
 
-# 2. Initialize the App (FIXED LINE)
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.PROJECT_VERSION)
 
-# 3. CORS Configuration (Allows frontend to talk to backend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 4. Include the Auth Router (Login/Register)
 app.include_router(auth.router, tags=["Authentication"])
 
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Charla API"}
 
-# 5. The WebSocket Endpoint
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    await manager.connect(websocket, client_id)
+# --- 🔒 NEW SECURE WEBSOCKET ENDPOINT ---
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    # 1. Get Token from Query Param (ws://.../ws?token=XYZ)
+    token = websocket.query_params.get("token")
+    
+    if not token:
+        await websocket.close(code=1008) # Policy Violation
+        return
+
     try:
-        # Notify others
-        await manager.broadcast(f"{client_id} joined the chat", "System")
+        # 2. Decode the Token to find the Username
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
         
-        while True:
-            # Wait for message
-            data = await websocket.receive_text()
-            # Broadcast message
-            await manager.broadcast(data, client_id)
+        if username is None:
+            await websocket.close(code=1008)
+            return
             
+    except JWTError:
+        # Invalid Token (Fake or Expired)
+        await websocket.close(code=1008)
+        return
+
+    # 3. Connection Accepted!
+    await manager.connect(websocket, username)
+    try:
+        await manager.broadcast(f"{username} joined the chat", "System")
+        while True:
+            data = await websocket.receive_text()
+            # Send message with REAL username (not spoofed)
+            await manager.broadcast(data, username)
     except WebSocketDisconnect:
-        manager.disconnect(client_id)
-        await manager.broadcast(f"{client_id} left the chat", "System")
+        manager.disconnect(username)
+        await manager.broadcast(f"{username} left the chat", "System")

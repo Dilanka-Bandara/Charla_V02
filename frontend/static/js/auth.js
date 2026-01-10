@@ -40,16 +40,22 @@ loginForm.addEventListener('submit', async (e) => {
         const data = await response.json();
 
         if (response.ok) {
-            if (isLogin) {
-                // Save the Token! This is your key.
-                localStorage.setItem('token', data.access_token);
-                localStorage.setItem('charla_username', username);
-                window.location.href = 'app.html';
-            } else {
-                alert("Registration successful! Please login.");
-                // Switch back to login view automatically
-                toggleAuth.click();
-            }
+        if (isLogin) {
+            // 1. Save the token
+            localStorage.setItem('token', data.access_token);
+            localStorage.setItem('charla_username', username);
+            
+            // 2. REDIRECT TO CHAT
+            console.log("Login success! Redirecting..."); // Check console for this
+            window.location.href = 'app.html'; 
+        } else {
+            alert("Registration successful! Please login.");
+            toggleAuth.click(); // Switch back to login view
+        }
+    } else {
+        // If backend returns an error (like "Wrong password")
+        alert(data.detail || "Authentication failed");
+    }
         } else {
             alert(data.detail || "Authentication failed");
         }
