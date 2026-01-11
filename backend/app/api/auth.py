@@ -10,23 +10,25 @@ router = APIRouter()
 
 @router.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    # 1. Check if user already exists
+    # 1. Check if USERNAME exists
     user_exists = db.query(User).filter(User.username == user.username).first()
     if user_exists:
         raise HTTPException(status_code=400, detail="Username already registered")
     
-    # 2. Hash the password
+    # 2. Check if EMAIL exists (NEW CHECK)
+    email_exists = db.query(User).filter(User.email == user.email).first()
+    if email_exists:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # 3. Hash the password
     hashed_pw = get_password_hash(user.password)
     
-    # 3. Save to DB
+    # 4. Save to DB
     new_user = User(username=user.username, email=user.email, hashed_password=hashed_pw)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return {"message": "User created successfully"}
-
-@router.post("/login", response_model=Token)
-def login(user: UserLogin, db: Session = Depends(get_db)):
     # 1. Find user
     db_user = db.query(User).filter(User.username == user.username).first()
     if not db_user:
