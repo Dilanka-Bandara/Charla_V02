@@ -69,3 +69,52 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(username)
         await manager.broadcast(f"{username} left the chat", "System")
+        
+        
+@app.websocket("/ws")
+async def websocket_endpoint(
+    websocket: WebSocket, 
+    db: Session = Depends(get_db)
+):
+    token = websocket.query_params.get("token")
+    
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            await websocket.close(code=1008)
+            return
+    except JWTError:
+        await websocket.close(code=1008)
+        return
+
+    # 1. Connect (This now automatically sends the user list)
+    await manager.connect(websocket, username)
+    
+    # 2. Get User ID for DB saving
+    user = db.query(User).filter(User.username == username).first()
+    
+    try:
+        # System Message
+        await manager.broadcast(f"{username} joined the chat", "System")
+        
+        while True:
+            data = await websocket.receive_text()
+            
+            # Save Message
+            if user:
+                new_msg = Message(content=data, sender_id=user.id)
+                db.add(new_msg)
+                db.commit()
+
+            # Broadcast Message
+            await manager.broadcast(data, username)
+            
+    except WebSocketDisconnect:
+        # 3. Disconnect & Update List
+        await manager.disconnect(username) # This updates the list for everyone
+        await manager.broadcast(f"{username} left the chat", "System")
