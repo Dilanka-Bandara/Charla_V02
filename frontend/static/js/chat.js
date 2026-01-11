@@ -42,4 +42,23 @@ socket.onmessage = function(event) {
 };
 
 // ... (Rest of the file remains the same: messageForm listener and appendMessage function) ...
-// Ensure you keep the 'document.getElementById('messageForm')...' and 'appendMessage' function below this.
+// Ensure you keep the 'document.getElementById('messageForm')...' and 'appendMessage' function below this.// ... existing appendMessage function ...
+
+// --- 📜 NEW: Load History Function ---
+async function loadHistory() {
+    try {
+        const response = await fetch('http://localhost:8000/messages?limit=50');
+        const messages = await response.json();
+        
+        // Loop through and display them
+        messages.forEach(msg => {
+            appendMessage(msg.sender, msg.content);
+        });
+        
+    } catch (err) {
+        console.error("Failed to load history:", err);
+    }
+}
+
+// Call it on startup
+loadHistory();

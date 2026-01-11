@@ -1,10 +1,13 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from jose import jwt, JWTError # <--- NEW IMPORT
-from app.core.config import settings # <--- NEW IMPORT
-from app.db.session import engine, Base
+from jose import jwt, JWTError
+from sqlalchemy.orm import Session # <--- Needed for DB session
+
+from app.core.config import settings
+from app.db.session import engine, Base, get_db # <--- Import get_db
+from app.db.models import User, Message # <--- Import Models
 from app.websockets.manager import manager
-from app.api import auth 
+from app.api import auth, chat # <--- Import chat
 
 Base.metadata.create_all(bind=engine)
 
@@ -18,44 +21,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register Routers
 app.include_router(auth.router, tags=["Authentication"])
+app.include_router(chat.router, tags=["Chat"]) # <--- Register the new History API
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to Charla API"}
-
-# --- 🔒 NEW SECURE WEBSOCKET ENDPOINT ---
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    # 1. Get Token from Query Param (ws://.../ws?token=XYZ)
+async def websocket_endpoint(
+    websocket: WebSocket, 
+    db: Session = Depends(get_db) # <--- Inject Database Session into WebSocket
+):
     token = websocket.query_params.get("token")
     
     if not token:
-        await websocket.close(code=1008) # Policy Violation
-        return
-
-    try:
-        # 2. Decode the Token to find the Username
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        username: str = payload.get("sub")
-        
-        if username is None:
-            await websocket.close(code=1008)
-            return
-            
-    except JWTError:
-        # Invalid Token (Fake or Expired)
         await websocket.close(code=1008)
         return
 
-    # 3. Connection Accepted!
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            await websocket.close(code=1008)
+            return
+    except JWTError:
+        await websocket.close(code=1008)
+        return
+
+    # 1. Connect
     await manager.connect(websocket, username)
+    
+    # 2. Get the User Object (We need the ID to save messages)
+    user = db.query(User).filter(User.username == username).first()
+    
     try:
         await manager.broadcast(f"{username} joined the chat", "System")
+        
         while True:
             data = await websocket.receive_text()
-            # Send message with REAL username (not spoofed)
+            
+            # --- 💾 SAVE TO DATABASE ---
+            new_msg = Message(content=data, sender_id=user.id)
+            db.add(new_msg)
+            db.commit()
+            # ---------------------------
+
             await manager.broadcast(data, username)
+            
     except WebSocketDisconnect:
         manager.disconnect(username)
         await manager.broadcast(f"{username} left the chat", "System")
